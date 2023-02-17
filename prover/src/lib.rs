@@ -74,23 +74,23 @@ use math::log2;
 #[cfg(feature = "std")]
 use std::time::Instant;
 
-mod domain;
+pub mod domain;
 pub use domain::StarkDomain;
 
 mod matrix;
 pub use matrix::Matrix;
 
-mod constraints;
+pub mod constraints;
 use constraints::{CompositionPoly, ConstraintCommitment, ConstraintEvaluator};
 
 mod composer;
 use composer::DeepCompositionPoly;
 
-mod trace;
+pub mod trace;
 pub use trace::{Trace, TraceTable, TraceTableFragment};
 use trace::{TraceCommitment, TraceLde, TracePolyTable};
 
-mod channel;
+pub mod channel;
 use channel::ProverChannel;
 
 mod errors;
@@ -532,4 +532,22 @@ pub trait Prover {
         );
         constraint_commitment
     }
+}
+
+pub fn build_trace_commitment_f<E, S, H>(
+    trace: &Matrix<E>,
+    domain: &StarkDomain<S>,
+) -> (Matrix<E>, MerkleTree<H>, Matrix<E>)
+where
+    E: FieldElement<BaseField = S>,
+    S: StarkField,
+    H: ElementHasher<BaseField = S>,
+{
+    // extend the execution trace
+    let trace_polys = trace.interpolate_columns();
+    let trace_lde = trace_polys.evaluate_columns_over(domain);
+    // build trace commitment
+    let trace_tree = trace_lde.commit_to_rows();
+
+    (trace_lde, trace_tree, trace_polys)
 }
