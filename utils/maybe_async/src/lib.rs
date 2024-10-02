@@ -5,7 +5,9 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Expr, ItemFn, TraitItemFn};
+use syn::{
+    parse_macro_input, Expr, ImplItem, Item, ItemFn, ItemImpl, ItemTrait, TraitItem, TraitItemFn,
+};
 
 /// Parses a function (regular or trait) and conditionally adds the `async` keyword depending on
 /// the `async` feature flag being enabled.
@@ -42,27 +44,104 @@ use syn::{parse_macro_input, Expr, ItemFn, TraitItemFn};
 /// ```
 #[proc_macro_attribute]
 pub fn maybe_async(_attr: TokenStream, input: TokenStream) -> TokenStream {
+    // Check if the input is a function
     if let Ok(func) = syn::parse::<ItemFn>(input.clone()) {
         if cfg!(feature = "async") {
-            let ItemFn { attrs, vis, sig, block } = func;
+            let ItemFn { attrs, vis, mut sig, block } = func;
+            sig.asyncness = Some(syn::token::Async::default());
             quote! {
-                #(#attrs)* #vis async #sig { #block }
+                #(#attrs)* #vis #sig { #block }
             }
             .into()
         } else {
             quote!(#func).into()
         }
-    } else if let Ok(func) = syn::parse::<TraitItemFn>(input.clone()) {
+    }
+    // Check if the input is a trait function
+    else if let Ok(func) = syn::parse::<TraitItemFn>(input.clone()) {
         if cfg!(feature = "async") {
-            let TraitItemFn { attrs, sig, default, semi_token } = func;
+            let TraitItemFn { attrs, mut sig, default, semi_token } = func;
+            sig.asyncness = Some(syn::token::Async::default());
             quote! {
-                #(#attrs)* async #sig #default #semi_token
+                #(#attrs)* #sig #default #semi_token
             }
             .into()
         } else {
             quote!(#func).into()
         }
-    } else {
+    }
+    // Check if the input is a trait definition
+    else if let Ok(mut trait_item) = syn::parse::<ItemTrait>(input.clone()) {
+        let vis = &trait_item.vis;
+        let trait_ident = &trait_item.ident;
+        let trait_generics = &trait_item.generics;
+
+        if cfg!(feature = "async") {
+            // Modify each function in the trait to add async keyword
+            trait_item.items.iter_mut().for_each(|item| {
+                if let TraitItem::Fn(method) = item {
+                    method.sig.asyncness = Some(syn::token::Async::default());
+                }
+            });
+            let items = &trait_item.items;
+            quote! {
+                #[async_trait::async_trait(?Send)]
+                #vis trait #trait_ident #trait_generics {
+                    #( #items )*
+                }
+            }
+            .into()
+        } else {
+            let items = &trait_item.items;
+            quote! {
+                #vis trait #trait_ident #trait_generics {
+                    #( #items )*
+                }
+            }
+            .into()
+        }
+    }
+    // Check if the input is an impl block
+    else if let Ok(mut impl_item) = syn::parse::<ItemImpl>(input.clone()) {
+        let impl_generics = &impl_item.generics;
+        let self_ty = &impl_item.self_ty;
+
+        if cfg!(feature = "async") {
+            // Modify each function in the impl to add async keyword
+            impl_item.items.iter_mut().for_each(|item| {
+                if let ImplItem::Fn(method) = item {
+                    method.sig.asyncness = Some(syn::token::Async::default());
+                }
+            });
+
+            let items = &impl_item.items;
+
+            if let Some((bang, trait_path, for_token)) = &impl_item.trait_ {
+                // Trait implementation
+                quote! {
+                    #[async_trait::async_trait(?Send)]
+                    impl #impl_generics #bang #trait_path #for_token #self_ty {
+                        #( #items )*
+                    }
+                }
+                .into()
+            } else {
+                // Inherent impl block
+                quote! {
+                    #[async_trait::async_trait(?Send)]
+                    impl #impl_generics #self_ty {
+                        #( #items )*
+                    }
+                }
+                .into()
+            }
+        } else {
+            // No need to modify functions
+            quote!(#impl_item).into()
+        }
+    }
+    // If none of the above matches, return the input unchanged
+    else {
         input
     }
 }
